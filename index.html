@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plinko Physics Simulation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #0f172a;
+            color: white;
+            overflow: hidden;
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        canvas {
+            touch-action: none;
+        }
+        .multiplier-bar {
+            display: grid;
+            gap: 1px;
+            text-align: center;
+            font-weight: 900;
+            text-transform: uppercase;
+            line-height: 1;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body class="p-2">
+
+    <div class="w-full max-w-2xl bg-slate-800 rounded-2xl p-4 shadow-2xl border border-slate-700 flex flex-col max-h-[95vh]">
+        <div class="flex justify-between items-start mb-2 px-1">
+            <div>
+                <h1 class="text-2xl font-bold bg-gradient-to-r from-yellow-400 via-emerald-400 to-cyan-500 bg-clip-text text-transparent">
+                    Plinko Mania
+                  idk why i made this just fun to lag
+                </h1>
+                <div class="flex gap-4 items-center">
+                    <div class="text-[12px] text-slate-400 font-bold">LEVEL: <span id="levelText">0</span></div>
+                    <label class="inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="adminToggle" class="sr-only peer">
+                        <div class="relative w-7 h-4 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-cyan-600"></div>
+                        <span class="ms-2 text-[10px] font-bold text-slate-400 uppercase tracking-tighter text-cyan-400">Admin Controls</span>
+                    </label>
+                </div>
+            </div>
+            <div class="text-right">
+                <div id="score" class="text-3xl font-mono font-bold text-yellow-400">0.00</div>
+                <button id="upgradeBtn" class="mt-1 bg-amber-500 hover:bg-amber-400 text-slate-900 px-4 py-1.5 rounded-md text-[11px] font-black transition-all">
+                    UPGRADE: 100.00
+                </button>
+            </div>
+        </div>
+
+        <!-- Admin Control Panel -->
+        <div id="adminPanel" class="hidden flex gap-2 mb-2 p-2 bg-slate-900/50 rounded-lg border border-cyan-900/30">
+            <button id="clearBallsBtn" class="bg-rose-600 hover:bg-rose-500 text-white px-3 py-1 rounded text-[10px] font-bold uppercase transition-colors">
+                Kill All Balls
+            </button>
+            <button id="addMoneyBtn" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded text-[10px] font-bold uppercase transition-colors">
+                +20 Billion
+            </button>
+        </div>
+
+        <div class="relative bg-slate-900 rounded-xl overflow-hidden border border-slate-700 flex-grow mb-2" style="aspect-ratio: 10/13;">
+            <canvas id="gameCanvas"></canvas>
+            
+            <div class="absolute bottom-3 left-1/2 -translate-x-1/2">
+                <button id="dropBtn" class="bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition-all px-10 py-2 rounded-full font-bold text-sm shadow-lg shadow-indigo-900/20">
+                    RELEASE BALL
+                </button>
+            </div>
+        </div>
+
+        <div id="multiplierLabels" class="multiplier-bar text-[5px]"></div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const dropBtn = document.getElementById('dropBtn');
+        const upgradeBtn = document.getElementById('upgradeBtn');
+        const adminToggle = document.getElementById('adminToggle');
+        const adminPanel = document.getElementById('adminPanel');
+        const clearBallsBtn = document.getElementById('clearBallsBtn');
+        const addMoneyBtn = document.getElementById('addMoneyBtn');
+        const scoreDisplay = document.getElementById('score');
+        const levelDisplay = document.getElementById('levelText');
+        const labelsContainer = document.getElementById('multiplierLabels');
+
+        let totalScore = 0;
+        let currentLevel = 0;
+        let upgradeCost = 100;
+        let width, height;
+        const balls = [];
+        const particles = [];
+        const pegs = [];
+        
+        let baseRows = 24; 
+        const basePegRadius = 2.1; 
+        const baseBallRadius = 3.2; 
+        const gravity = 0.18;      
+        const friction = 0.995;     
+        const bounce = 0.5;       
+
+        let currentPegRadius = basePegRadius;
+        let currentBallRadius = baseBallRadius;
+
+        let buckets = [];
+
+        function formatScore(val) {
+            if (val >= 1e12) return (val / 1e12).toFixed(2) + "T";
+            if (val >= 1e9) return (val / 1e9).toFixed(2) + "B";
+            if (val >= 1e6) return (val / 1e6).toFixed(2) + "M";
+            return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function updateBuckets() {
+            const isAdmin = adminToggle.checked;
+            adminPanel.classList.toggle('hidden', !isAdmin);
+
+            const baseArr = [1, 2, 5, 10, 25];
+            const activeTiers = [...baseArr];
+            for(let i = 0; i < currentLevel; i++) {
+                const highest = activeTiers[activeTiers.length - 1];
+                activeTiers.push(highest * 5);
+            }
+
+            let fullLayout;
+            if (isAdmin) {
+                fullLayout = [...activeTiers].reverse().concat([1.0]).concat(activeTiers);
+            } else {
+                fullLayout = [...activeTiers].reverse().concat([0.5, 0, 0.5]).concat(activeTiers);
+            }
+            
+            buckets = fullLayout.map((m) => {
+                return {
+                    label: m + 'x',
+                    mult: m,
+                    spawn: m < 1 ? 0 : Math.floor(m), 
+                    color: getBucketColor(m),
+                };
+            });
+
+            labelsContainer.style.gridTemplateColumns = `repeat(${buckets.length}, minmax(0, 1fr))`;
+            labelsContainer.innerHTML = buckets.map(b => `<div style="color: ${b.color}">${b.label}</div>`).join('');
+            
+            initBoard();
+        }
+
+        function getBucketColor(m) {
+            if (m === 0) return '#475569';
+            if (m < 1) return '#f43f5e';
+            if (m === 1) return '#c084fc';
+            if (m < 10) return '#60a5fa';
+            if (m < 50) return '#fbbf24';
+            if (m < 200) return '#e2e8f0';
+            return '#ffffff';
+        }
+
+        function resize() {
+            const container = canvas.parentElement;
+            width = container.clientWidth;
+            height = container.clientHeight;
+            canvas.width = width * window.devicePixelRatio;
+            canvas.height = height * window.devicePixelRatio;
+            canvas.style.width = width + 'px';
+            canvas.style.height = height + 'px';
+            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            initBoard();
+        }
+
+        function initBoard() {
+            pegs.length = 0;
+            const currentRows = baseRows + (currentLevel * 4); 
+            const startY = 40; 
+            const bottomMargin = 45; 
+            
+            const spacingY = (height - startY - bottomMargin) / (currentRows - 1);
+
+            const scale = baseRows / currentRows;
+            currentPegRadius = basePegRadius * scale;
+            currentBallRadius = baseBallRadius * scale;
+
+            for (let i = 0; i < currentRows; i++) {
+                const rowY = startY + i * spacingY;
+                const rowPegCount = 1 + i;
+                const maxRowWidth = (rowPegCount / currentRows) * (width * 0.75);
+                const startX = (width / 2) - (maxRowWidth / 2);
+                
+                for (let j = 0; j < rowPegCount; j++) {
+                    const px = (rowPegCount === 1) ? width / 2 : startX + (j * (maxRowWidth / (rowPegCount - 1)));
+                    if (px > -20 && px < width + 20) {
+                        pegs.push({ x: px, y: rowY });
+                    }
+                }
+            }
+        }
+
+        class Ball {
+            constructor(color = '#fff') {
+                this.radius = currentBallRadius;
+                this.x = width / 2 + (Math.random() * (width * 0.04) - (width * 0.02));
+                this.y = 50; 
+                this.vx = (Math.random() - 0.5) * 1.5;
+                this.vy = 1.0; 
+                this.color = color;
+                this.done = false;
+                this.stuckTimer = 0;
+            }
+
+            update() {
+                this.vy += gravity;
+                this.vx *= friction;
+                this.x += this.vx;
+                this.y += this.vy;
+
+                if (this.x - this.radius < 2) {
+                    this.x = this.radius + 2;
+                    this.vx *= -bounce;
+                } else if (this.x + this.radius > width - 2) {
+                    this.x = width - this.radius - 2;
+                    this.vx *= -bounce;
+                }
+
+                if (Math.abs(this.vy) < 0.1) {
+                    this.stuckTimer++;
+                    if (this.stuckTimer > 20) {
+                        this.vx += (Math.random() - 0.5) * 3;
+                        this.vy += 1.5; 
+                        this.stuckTimer = 0;
+                    }
+                } else {
+                    this.stuckTimer = 0;
+                }
+
+                for (let i = 0; i < pegs.length; i++) {
+                    const peg = pegs[i];
+                    const dx = this.x - peg.x;
+                    const dy = this.y - peg.y;
+                    const distSq = dx * dx + dy * dy;
+                    const minDist = this.radius + currentPegRadius;
+                    
+                    if (distSq < minDist * minDist) {
+                        const dist = Math.sqrt(distSq);
+                        const normalX = dx / dist;
+                        const normalY = dy / dist;
+                        this.x = peg.x + normalX * minDist;
+                        this.y = peg.y + normalY * minDist;
+                        const dot = this.vx * normalX + this.vy * normalY;
+                        this.vx = (this.vx - 2 * dot * normalX) * bounce;
+                        this.vy = (this.vy - 2 * dot * normalY) * bounce;
+                        this.vx += (Math.random() - 0.5) * 0.4; 
+                    }
+                }
+
+                if (this.y > height - 40) {
+                    this.done = true;
+                    this.calculateResult();
+                }
+            }
+
+            calculateResult() {
+                const bucketWidth = width / buckets.length;
+                const index = Math.floor(this.x / bucketWidth);
+                const safeIndex = Math.max(0, Math.min(buckets.length - 1, index));
+                const bucket = buckets[safeIndex];
+                
+                totalScore += bucket.mult;
+                scoreDisplay.innerText = formatScore(totalScore);
+                
+                createExplosion(this.x, height - 20, bucket.color);
+
+                if (bucket.spawn > 0 && balls.length < 2000) { 
+                    for (let i = 0; i < bucket.spawn; i++) {
+                        balls.push(new Ball(bucket.color));
+                    }
+                }
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.closePath();
+            }
+        }
+
+        function createExplosion(x, y, color) {
+            for (let i = 0; i < 6; i++) {
+                particles.push({
+                    x, y,
+                    vx: (Math.random() - 0.5) * 5,
+                    vy: (Math.random() - 0.5) * 5,
+                    life: 1.0,
+                    color
+                });
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, width, height);
+
+            ctx.fillStyle = '#475569';
+            for (let i = 0; i < pegs.length; i++) {
+                ctx.beginPath();
+                ctx.arc(pegs[i].x, pegs[i].y, currentPegRadius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            const bWidth = width / buckets.length;
+            buckets.forEach((b, i) => {
+                ctx.fillStyle = b.color + '15';
+                ctx.fillRect(i * bWidth, height - 45, bWidth, 45);
+            });
+
+            for (let i = balls.length - 1; i >= 0; i--) {
+                balls[i].update();
+                balls[i].draw();
+                if (balls[i].done) balls.splice(i, 1);
+            }
+
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx; p.y += p.vy; p.life -= 0.03;
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                    continue;
+                }
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 1.2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1.0;
+            requestAnimationFrame(draw);
+        }
+
+        upgradeBtn.addEventListener('click', () => {
+            if (totalScore >= upgradeCost) {
+                totalScore -= upgradeCost;
+                currentLevel++;
+                upgradeCost *= 2.5; 
+                
+                scoreDisplay.innerText = formatScore(totalScore);
+                levelDisplay.innerText = currentLevel;
+                upgradeBtn.innerText = `UPGRADE: ${formatScore(upgradeCost)}`;
+                
+                updateBuckets();
+            }
+        });
+
+        adminToggle.addEventListener('change', updateBuckets);
+
+        // Admin functionality
+        clearBallsBtn.addEventListener('click', () => {
+            balls.length = 0;
+        });
+
+        addMoneyBtn.addEventListener('click', () => {
+            totalScore += 20000000000; // Added 20 Billion
+            scoreDisplay.innerText = formatScore(totalScore);
+        });
+
+        window.addEventListener('resize', resize);
+        updateBuckets();
+        resize();
+        draw();
+
+        dropBtn.addEventListener('click', () => {
+            if (balls.length < 2000) balls.push(new Ball());
+        });
+    </script>
+</body>
+</html>
